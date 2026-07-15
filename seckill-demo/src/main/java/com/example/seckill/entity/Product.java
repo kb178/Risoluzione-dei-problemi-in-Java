@@ -8,6 +8,7 @@ public class Product {
     private String name;
     private Integer stock;
     private BigDecimal price;
+    private Integer version;  // 乐观锁版本号
     private LocalDateTime createTime;
     private LocalDateTime updateTime;
 
@@ -42,6 +43,14 @@ public class Product {
 
     public void setPrice(BigDecimal price) {
         this.price = price;
+    }
+
+    public Integer getVersion() {
+        return version;
+    }
+
+    public void setVersion(Integer version) {
+        this.version = version;
     }
 
     public LocalDateTime getCreateTime() {
