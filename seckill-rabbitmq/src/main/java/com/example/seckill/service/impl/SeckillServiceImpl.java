@@ -13,6 +13,23 @@ import org.springframework.stereotype.Service;
 import java.math.BigDecimal;
 import java.util.UUID;
 
+/**
+ * 秒杀服务实现类（原方案：在消费者中创建订单和扣减库存）
+ *
+ * 执行流程：
+ * 1. Redis原子扣减库存（Lua脚本） - 快速判断，毫秒级响应
+ * 2. 发送MQ消息到队列
+ * 3. 消费者收到消息后，执行数据库扣减库存和创建订单
+ *
+ * 优点：
+ * - 简单：代码逻辑清晰
+ * - 性能好：数据库操作异步执行，不阻塞用户请求
+ * - 易维护：代码量少，容易理解
+ *
+ * 缺点：
+ * - 如果MQ发送失败，消息丢失，数据不一致
+ * - 需要额外的补偿机制处理数据不一致
+ */
 @Service
 public class SeckillServiceImpl implements SeckillService {
 
@@ -25,10 +42,6 @@ public class SeckillServiceImpl implements SeckillService {
     @Autowired
     private RabbitTemplate rabbitTemplate;
 
-    // ==================== 保留原来的StringRedisTemplate（用于学习对比） ====================
-    // @Autowired
-    // private StringRedisTemplate stringRedisTemplate;
-
     private static final String STOCK_KEY_PREFIX = "product:stock:";
     private static final String USER_BUY_KEY_PREFIX = "user:buy:";
 
@@ -37,13 +50,14 @@ public class SeckillServiceImpl implements SeckillService {
         // ==================== 1. Redis原子扣减库存（Lua脚本） ====================
         String stockKey = STOCK_KEY_PREFIX + productId;
         String userBuyKey = USER_BUY_KEY_PREFIX + productId + ":" + userId;
-        
+
         // Lua脚本原子操作：检查库存 + 扣减库存 + 设置用户标记
-        Long result = redisService.seckill(stockKey, userBuyKey, 86400);  // 24小时过期
-        
+        // 修复漏洞2：用户标记过期时间从24小时改为7天（604800秒），防止过期后重复购买
+        Long result = redisService.seckill(stockKey, userBuyKey, 604800);  // 7天过期
+
         // 使用long基本类型避免Long包装类的NPE和比较问题
         long code = (result != null) ? result.longValue() : -99;
-        
+
         switch ((int) code) {
             case -1:
                 throw new IllegalStateException("您已经参与过该商品的秒杀，请勿重复购买");
@@ -62,7 +76,7 @@ public class SeckillServiceImpl implements SeckillService {
 
         // ==================== 3. 发送MQ消息（异步处理订单） ====================
         String orderNo = UUID.randomUUID().toString().replace("-", "");
-        
+
         // 获取商品价格（防止空指针）
         Product product = productMapper.selectById(productId);
         if (product == null) {
@@ -71,10 +85,10 @@ public class SeckillServiceImpl implements SeckillService {
             throw new IllegalStateException("商品不存在");
         }
         BigDecimal price = product.getPrice();
-        
+
         // 构建消息
         OrderMessage message = new OrderMessage(productId, userId, orderNo, price);
-        
+
         // 发送消息到MQ
         try {
             rabbitTemplate.convertAndSend(
@@ -82,7 +96,7 @@ public class SeckillServiceImpl implements SeckillService {
                 RabbitMQConfig.ORDER_ROUTING_KEY,
                 message
             );
-            System.out.printf("用户[%d]秒杀商品[%d]成功，订单[%s]已发送到MQ队列%n", 
+            System.out.printf("用户[%d]秒杀商品[%d]成功，订单[%s]已发送到MQ队列%n",
                 userId, productId, orderNo);
         } catch (Exception e) {
             // MQ发送失败，回滚Redis
@@ -96,15 +110,15 @@ public class SeckillServiceImpl implements SeckillService {
     }
 
     // ==================== 保留原来的Redis操作代码（有并发问题，用于学习对比） ====================
-    // 
+    //
     // 【问题代码】多次Redis调用，不是原子操作，存在并发问题：
-    // 
+    //
     // @Override
     // public String seckill(Long productId, Long userId) {
     //     // 1. 用户重复购买检查（第一次Redis调用）
     //     String userBuyKey = USER_BUY_KEY_PREFIX + productId + ":" + userId;
     //     Boolean isFirstBuy = stringRedisTemplate.opsForValue().setIfAbsent(userBuyKey, "1", 24, TimeUnit.HOURS);
-    //     
+    //
     //     if (Boolean.FALSE.equals(isFirstBuy)) {
     //         throw new RuntimeException("您已经参与过该商品的秒杀，请勿重复购买");
     //     }
@@ -112,7 +126,7 @@ public class SeckillServiceImpl implements SeckillService {
     //     // 2. Redis扣减库存（第二次Redis调用）← 如果这里宕机，用户标记已设置但库存没扣！
     //     String stockKey = STOCK_KEY_PREFIX + productId;
     //     Long stock = stringRedisTemplate.opsForValue().decrement(stockKey);
-    //     
+    //
     //     if (stock == null) {
     //         Product product = productMapper.selectById(productId);
     //         if (product == null) {
@@ -121,7 +135,7 @@ public class SeckillServiceImpl implements SeckillService {
     //         stringRedisTemplate.opsForValue().set(stockKey, String.valueOf(product.getStock()));
     //         stock = stringRedisTemplate.opsForValue().decrement(stockKey);
     //     }
-    //     
+    //
     //     if (stock < 0) {
     //         // 库存不足，回滚Redis
     //         stringRedisTemplate.opsForValue().increment(stockKey);

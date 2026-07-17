@@ -16,6 +16,5 @@ F:\code\java开发\springboot3\ProblemaJava\seckill-rabbitmq\src\main\java\com\exa
 F:\code\java开发\springboot3\ProblemaJava\seckill-rabbitmq\src\main\java\com\example\seckill\mq\DeadLetterConsumer.java
 F:\code\java开发\springboot3\ProblemaJava\seckill-rabbitmq\src\main\java\com\example\seckill\SeckillRabbitmqApplication.java
 F:\code\java开发\springboot3\ProblemaJava\seckill-rabbitmq\src\main\java\com\example\seckill\config\RabbitMQConfig.java
-F:\code\java开发\springboot3\ProblemaJava\seckill-rabbitmq\src\main\java\com\example\seckill\service\CompensationService.java
 F:\code\java开发\springboot3\ProblemaJava\seckill-rabbitmq\src\main\java\com\example\seckill\service\SeckillService.java
 F:\code\java开发\springboot3\ProblemaJava\seckill-rabbitmq\src\main\java\com\example\seckill\service\QueueMonitorService.java

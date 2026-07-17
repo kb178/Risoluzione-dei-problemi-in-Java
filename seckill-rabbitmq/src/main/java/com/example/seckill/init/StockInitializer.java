@@ -23,23 +23,18 @@ public class StockInitializer implements CommandLineRunner {
     @Override
     public void run(String... args) throws Exception {
         System.out.println("========== 开始初始化商品库存到Redis ==========");
-        
+        //查找所有商品
         List<Product> products = productMapper.selectAll();
-        
+        //遍历
         for (Product product : products) {
+            //用每一个商品id和product:stock:组合成redis的key
             String stockKey = STOCK_KEY_PREFIX + product.getId();
-            
-            // 使用RedisService初始化库存
-            Long currentStock = redisService.getStock(stockKey);
-            
-            if (currentStock == null) {
-                redisService.initStock(stockKey, product.getStock());
-                System.out.printf("商品[%s]库存初始化到Redis: %d%n", product.getName(), product.getStock());
-            } else {
-                System.out.printf("商品[%s]库存已存在Redis: %d，跳过%n", product.getName(), currentStock);
-            }
+
+            // 修复漏洞10：每次启动都用DB的值覆盖Redis，保证Redis和DB库存一致
+            redisService.initStock(stockKey, product.getStock());
+            System.out.printf("商品[%s]库存已同步到Redis: %d%n", product.getName(), product.getStock());
         }
-        
+
         System.out.println("========== 商品库存初始化完成 ==========");
     }
 }

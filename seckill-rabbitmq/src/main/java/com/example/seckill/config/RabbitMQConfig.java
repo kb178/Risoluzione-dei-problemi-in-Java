@@ -8,6 +8,8 @@ import org.springframework.amqp.support.converter.Jackson2JsonMessageConverter;
 import org.springframework.amqp.support.converter.MessageConverter;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.interceptor.TransactionInterceptor;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -16,6 +18,9 @@ import java.util.Map;
  * RabbitMQ配置类
  * 声明队列、交换机、绑定关系
  * 包含死信队列配置
+ *
+ * 修复说明：
+ * - 漏洞12：配置AdviceChain确保@Transactional生效
  */
 @Configuration
 public class RabbitMQConfig {
@@ -114,14 +119,36 @@ public class RabbitMQConfig {
     }
 
     /**
-     * 配置消费者监听器工厂，使用JSON转换器
-     * 关键：消费者需要用与生产者相同的转换器反序列化消息
+     * 配置事务拦截器
+     * 修复漏洞12：确保@Transactional对@RabbitListener生效
+     * 注意：Bean名称不能与Spring已有的transactionInterceptor冲突
      */
     @Bean
-    public SimpleRabbitListenerContainerFactory rabbitListenerContainerFactory(ConnectionFactory connectionFactory) {
+    public TransactionInterceptor rabbitTransactionInterceptor(PlatformTransactionManager transactionManager) {
+        org.springframework.transaction.interceptor.TransactionAttributeSource source =
+                new org.springframework.transaction.interceptor.NameMatchTransactionAttributeSource();
+        org.springframework.transaction.interceptor.RuleBasedTransactionAttribute attribute =
+                new org.springframework.transaction.interceptor.RuleBasedTransactionAttribute();
+        attribute.setPropagationBehavior(org.springframework.transaction.TransactionDefinition.PROPAGATION_REQUIRED);
+        ((org.springframework.transaction.interceptor.NameMatchTransactionAttributeSource) source)
+                .addTransactionalMethod("*", attribute);
+        return new TransactionInterceptor(transactionManager, source);
+    }
+
+    /**
+     * 配置消费者监听器工厂，使用JSON转换器
+     * 关键：消费者需要用与生产者相同的转换器反序列化消息
+     * 修复漏洞12：添加AdviceChain确保@Transactional生效
+     */
+    @Bean
+    public SimpleRabbitListenerContainerFactory rabbitListenerContainerFactory(
+            ConnectionFactory connectionFactory,
+            TransactionInterceptor rabbitTransactionInterceptor) {
         SimpleRabbitListenerContainerFactory factory = new SimpleRabbitListenerContainerFactory();
         factory.setConnectionFactory(connectionFactory);
         factory.setMessageConverter(jsonMessageConverter());
+        // 修复漏洞12：添加事务拦截器，确保@Transactional生效
+        factory.setAdviceChain(rabbitTransactionInterceptor);
         return factory;
     }
 }

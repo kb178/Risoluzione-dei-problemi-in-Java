@@ -73,12 +73,11 @@ public class RedisService {
 
     /**
      * 初始化库存
+     * 修复漏洞10：每次启动都用DB的值覆盖Redis，保证Redis和DB库存一致
      */
     public void initStock(String stockKey, int stock) {
-        String currentStock = stringRedisTemplate.opsForValue().get(stockKey);
-        if (currentStock == null) {
-            stringRedisTemplate.opsForValue().set(stockKey, String.valueOf(stock));
-        }
+        // 直接覆盖Redis库存，不管之前是什么值
+        stringRedisTemplate.opsForValue().set(stockKey, String.valueOf(stock));
     }
 
     /**

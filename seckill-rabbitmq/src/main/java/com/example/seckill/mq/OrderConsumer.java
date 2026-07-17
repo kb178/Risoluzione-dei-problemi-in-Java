@@ -7,16 +7,21 @@ import com.example.seckill.mapper.OrderMapper;
 import com.example.seckill.mapper.ProductMapper;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
  * MQ消费者
  * 监听订单队列，处理订单生成逻辑
- * 
+ *
  * ACK模式：AUTO（Spring自动处理ACK）
  * - 方法正常返回 → 自动ack
  * - 方法抛出异常 → 自动nack并重新入队
+ *
+ * 修复说明：
+ * - 漏洞11：增加订单号幂等性检查 + 捕获DuplicateKeyException
+ * - 漏洞12：配置AdviceChain确保@Transactional生效
  */
 @Component
 public class OrderConsumer {
@@ -32,15 +37,23 @@ public class OrderConsumer {
     public void handleOrder(OrderMessage message) {
         System.out.println("========== 收到订单消息 ==========");
         System.out.println("消息内容：" + message);
-        
+
         // 1. 幂等性检查（防止重复消费）
-        int count = orderMapper.countByUserAndProduct(message.getUserId(), message.getProductId());
-        if (count > 0) {
-            System.out.printf("用户[%d]已购买过商品[%d]，跳过重复消费%n", 
+        // 修复漏洞11：增加订单号检查，防止事务回滚后消息被ack导致重复扣减
+        int countByOrderNo = orderMapper.countByOrderNo(message.getOrderNo());
+        if (countByOrderNo > 0) {
+            System.out.printf("订单[%s]已存在，跳过重复消费%n", message.getOrderNo());
+            return;  // AUTO模式：正常返回自动ack
+        }
+
+        // 检查用户是否已购买过该商品
+        int countByUserAndProduct = orderMapper.countByUserAndProduct(message.getUserId(), message.getProductId());
+        if (countByUserAndProduct > 0) {
+            System.out.printf("用户[%d]已购买过商品[%d]，跳过重复消费%n",
                 message.getUserId(), message.getProductId());
             return;  // AUTO模式：正常返回自动ack
         }
-        System.out.printf("幂等性检查通过：用户[%d]首次购买商品[%d]%n", 
+        System.out.printf("幂等性检查通过：用户[%d]首次购买商品[%d]%n",
             message.getUserId(), message.getProductId());
 
         // 2. 扣减MySQL库存
@@ -58,14 +71,22 @@ public class OrderConsumer {
         order.setOrderNo(message.getOrderNo());
         order.setPrice(message.getPrice());
         order.setStatus(0); // 成功
-        
-        orderMapper.insert(order);
-        System.out.printf("订单插入成功：订单号[%s]%n", message.getOrderNo());
+
+        // 修复漏洞11：捕获DuplicateKeyException，防止并发竞态条件
+        try {
+            orderMapper.insert(order);
+            System.out.printf("订单插入成功：订单号[%s]%n", message.getOrderNo());
+        } catch (DuplicateKeyException e) {
+            // 重复订单，说明已被其他实例处理，回滚库存
+            System.out.printf("订单[%s]已存在（并发竞态），回滚库存%n", message.getOrderNo());
+            productMapper.increaseStock(message.getProductId());
+            return;
+        }
 
         System.out.printf("消息处理完成：订单号[%s]%n", message.getOrderNo());
         // AUTO模式：方法正常返回，Spring自动ack
         // 如果上面任何步骤抛异常，Spring自动nack并重新入队
-        
+
         System.out.println("========== 订单消息处理完成 ==========");
     }
 }
