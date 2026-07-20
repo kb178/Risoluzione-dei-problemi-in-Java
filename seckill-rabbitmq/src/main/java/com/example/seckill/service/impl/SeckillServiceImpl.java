@@ -8,6 +8,7 @@ import com.example.seckill.service.RedisService;
 import com.example.seckill.service.SeckillService;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
@@ -31,6 +32,7 @@ import java.util.UUID;
  * - 需要额外的补偿机制处理数据不一致
  */
 @Service
+@Primary  // 默认注入V1版本（Lua脚本方案）
 public class SeckillServiceImpl implements SeckillService {
 
     @Autowired

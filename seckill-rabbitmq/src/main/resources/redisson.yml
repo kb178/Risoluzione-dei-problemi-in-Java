@@ -1,0 +1,14 @@
+# Redisson配置
+singleServerConfig:
+  address: "redis://127.0.0.1:6379"
+  database: 0
+  # 连接池配置
+  connectionMinimumIdleSize: 10    # 最小空闲连接数
+  connectionPoolSize: 64           # 连接池最大连接数
+  # 超时配置
+  timeout: 10000                   # 命令执行超时时间（10秒）
+  # 连接重试配置
+  retryAttempts: 3                 # 连接失败后最多重试3次
+  retryInterval: 1500              # 重试间隔1.5秒
+  # 心跳检测
+  pingConnectionInterval: 30000    # 每30秒发送PING检测连接是否存活
