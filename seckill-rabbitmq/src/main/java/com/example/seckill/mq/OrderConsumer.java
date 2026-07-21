@@ -15,7 +15,7 @@ import org.springframework.transaction.annotation.Transactional;
  * MQ消费者
  * 监听订单队列，处理订单生成逻辑
  *
- * ACK模式：AUTO（Spring自动处理ACK）
+ * ACK模式：AUTO（Spring自动处理ACK）AUTO模式让ack和事务绑定在一起，不需要手动管理，更安全。
  * - 方法正常返回 → 自动ack
  * - 方法抛出异常 → 自动nack并重新入队
  *
@@ -46,7 +46,7 @@ public class OrderConsumer {
             return;  // AUTO模式：正常返回自动ack
         }
 
-        // 检查用户是否已购买过该商品
+        // 检查用户是否已购买过该商品，在数据库中查询查重
         int countByUserAndProduct = orderMapper.countByUserAndProduct(message.getUserId(), message.getProductId());
         if (countByUserAndProduct > 0) {
             System.out.printf("用户[%d]已购买过商品[%d]，跳过重复消费%n",
@@ -74,6 +74,8 @@ public class OrderConsumer {
 
         // 修复漏洞11：捕获DuplicateKeyException，防止并发竞态条件
         try {
+            //线程a和线程b同时提交一个订单，斗到达这个位置都扣减库存了a线程插入成功但是宕机导致没有ack，
+            // b线程再来插入那这个时候数据库同时插入同一个订单就开始报错因为业务只能一个人购买一个
             orderMapper.insert(order);
             System.out.printf("订单插入成功：订单号[%s]%n", message.getOrderNo());
         } catch (DuplicateKeyException e) {
