@@ -39,7 +39,7 @@ public interface ProductMapper {
 
     // 故意去掉 stock > 0 条件，制造超卖漏洞
     //@Update("UPDATE product SET stock = stock - 1 WHERE id = #{id} AND stock > 0") 隐式保护，在数据库执行会串行执行只有stack大于0才去执行
-    @Update("UPDATE product SET stock = stock - 1 WHERE id = #{id}")
+    @Update("UPDATE product SET stock = stock - 1 WHERE id = #{id} ")
     int decreaseStock(@Param("id") Long id);
 
     // 乐观锁：更新时检查版本号，如果版本号变化则更新失败

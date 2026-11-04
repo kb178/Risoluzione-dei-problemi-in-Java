@@ -12,9 +12,10 @@
 
 ```
 Risoluzione-dei-problemi-in-Java/
-├── seckill-demo/          # 第一阶段：数据库层面解决超卖
-├── seckill-redis/         # 第二阶段：Redis预扣减 + 补偿方案
-├── seckill-rabbitmq/      # 第三阶段：MQ异步 + 分布式锁 + 生产级架构
+├── seckill-demo/          # 秒杀第一阶段：数据库层面解决超卖
+├── seckill-redis/         # 秒杀第二阶段：Redis预扣减 + 补偿方案
+├── seckill-rabbitmq/      # 秒杀第三阶段：MQ异步 + 分布式锁 + 生产级架构
+├── short-url-system/      # 短链接系统：高并发读场景学习（三个阶段）
 └── README.md              # 本文件
 ```
 
@@ -279,4 +280,20 @@ curl http://localhost:8080/monitor/status
 
 ---
 
-*最后更新时间：2026-07-21*
+## 短链接系统（short-url-system）
+
+**定位**：与秒杀系统互补，秒杀侧重"高并发写"，短链接侧重"高并发读"
+
+**三个阶段**：
+
+| 阶段 | 目标 | 核心技术 |
+|------|------|---------|
+| 第一阶段 | 基础版 | Base62编码 + MySQL + Redis缓存 |
+| 第二阶段 | 优化版 | 布隆过滤器 + 互斥锁 + 雪花算法 |
+| 第三阶段 | 分布式版 | 分库分表 + 读写分离 + 分布式部署 |
+
+详细说明见：[README-SHORT-URL.md](./short-url-system/README-SHORT-URL.md)
+
+---
+
+*最后更新时间：2026-07-22*

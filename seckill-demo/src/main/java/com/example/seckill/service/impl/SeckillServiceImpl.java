@@ -103,10 +103,10 @@ public class SeckillServiceImpl implements SeckillService {
      */
     @Override
     @Transactional
-    public Order seckillV3悲观锁(Long productId, Long userId) {
+    public Order seckillV3(Long productId, Long userId) {
         // 1. 使用悲观锁查询商品信息（SELECT ... FOR UPDATE）
         // 这行代码会加行锁，其他线程的SELECT ... FOR UPDATE会被阻塞，需要配合@Transactional，否者执行完查库存代码后就会释放锁
-        Product product = productMapper.selectByIdForUpdate(productId);
+        Product product = productMapper.selectByIdForUpdate(productId); //加行锁不是表锁，
         if (product == null) {
             throw new RuntimeException("商品不存在");
         }
@@ -143,7 +143,7 @@ public class SeckillServiceImpl implements SeckillService {
      * 缺点：写冲突时需要重试，高并发写时重试次数多
      */
     @Override
-    public Order seckillV4乐观锁(Long productId, Long userId) {
+    public Order seckillV4(Long productId, Long userId) {
         // 最大重试次数，防止无限循环
         int maxRetry = 3;
 

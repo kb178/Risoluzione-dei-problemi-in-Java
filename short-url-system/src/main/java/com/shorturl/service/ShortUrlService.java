@@ -18,8 +18,8 @@ public class ShortUrlService {
     private final ShortUrlMapper shortUrlMapper;
     private final StringRedisTemplate redisTemplate;
 
-    // 短码字符集 (Base62)
-    private static final String BASE62_CHARS = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    // 短码字符集 (Base36 - 只用小写字母和数字，避免大小写冲突)
+    private static final String BASE62_CHARS = "0123456789abcdefghijklmnopqrstuvwxyz";
 
     // Redis缓存过期时间（小时）
     private static final long CACHE_EXPIRE_HOURS = 24;
@@ -150,8 +150,8 @@ public class ShortUrlService {
     private String base62Encode(long num) {
         StringBuilder sb = new StringBuilder();
         while (num > 0) {
-            sb.append(BASE62_CHARS.charAt((int) (num % 62)));
-            num /= 62;
+            sb.append(BASE62_CHARS.charAt((int) (num % 36)));
+            num /= 36;
         }
         // 先反转，再填充前导零
         String result = sb.reverse().toString();
