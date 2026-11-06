@@ -6,27 +6,6 @@ import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Update;
 import org.apache.ibatis.annotations.Select;
 
-/**
- * 为什么数据库防护不够？
- * 1. 性能问题
- * // 当前代码的问题
- * 1. 查库存 → 打数据库
- * 2. 判断库存 > 0 → 打数据库
- * 3. 扣库存 → 打数据库
- * 4. 生成订单 → 打数据库
- * 4次数据库操作，1000个并发 = 4000次数据库请求，数据库直接崩溃。
- * 2. 用户体验问题
- * - 库存=10，1000人抢
- * - 990人白忙活：查询→判断→扣减→失败→重试
- * - 服务器资源全部浪费在无效操作上
- * 3. 业务漏洞
- * // 当前代码还有漏洞
- * if (product.getStock() <= 0) {
- *     throw new RuntimeException("库存不足");
- * }
- * 并发时：100个请求同时查到 stock=1，都通过检查，然后99个扣减失败。
- *
- */
 
 @Mapper
 public interface ProductMapper {
