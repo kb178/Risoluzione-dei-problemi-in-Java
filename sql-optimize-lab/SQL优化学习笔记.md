@@ -1,150 +1,135 @@
 # SQL 优化学习笔记
 
-加索引只是第二环。整条链是：
+SQL 优化的版图就一条链：
 
-**定位 → 索引 → 写法 → 表结构 → 架构**
+定位 → 索引 → 写法 → 表结构 → 架构
 
-大部分人跳过第一环直接加索引，加完没效果就懵了。这份笔记是地图，配套动手材料在同目录：
+加索引在第二环，而很多人没进过第一环。不看执行计划就动手，加完没效果，卡住。这份笔记按这条链记，动手材料在同目录：
 
 | 文件 | 干什么 |
 |------|--------|
-| `lab.sql` | 建 `sql_lab` 库 + 3 张表 + 造数据（跑一次） |
-| `exercises.sql` | 7 个练习，一段一段贴进 mysql 客户端跑 |
-
-跑法：
+| `lab.sql` | 建 sql_lab 库、3 张表、造数据，跑一次 |
+| `exercises.sql` | 11 个练习，一段一段贴进客户端 |
 
 ```bash
 mysql -h127.0.0.1 -uroot -p --default-character-set=utf8mb4 < lab.sql
 mysql -h127.0.0.1 -uroot -p --default-character-set=utf8mb4   # 再进来贴练习
 ```
 
-注意连本机 MySQL 要带 `-h127.0.0.1`（这台机器上有两套 MySQL 实例，裸连默认管道会连错）。
+连本机要带 `-h127.0.0.1`。这台机器上有两套 MySQL，裸连走默认管道会连到另一套上去。
 
----
+## EXPLAIN
 
-## 第 0 环：EXPLAIN（比加索引重要）
-
-别凭感觉优化，先让 MySQL 告诉你它打算怎么执行：
+拿到 SQL 先别猜，让 MySQL 说它打算怎么干：
 
 ```sql
 EXPLAIN SELECT * FROM orders WHERE user_id = 2000;
 ```
 
-输出里只盯三个字段：
+字段一大堆，要看的就三个：
 
-| 字段 | 看什么 | 红灯长什么样 |
-|------|--------|--------------|
-| **type** | 访问方式 | `ALL` = 全表扫描 |
-| **rows** | 预估要扫多少行 | 几万、几十万 |
-| **Extra** | 额外动作 | `Using filesort`、`Using temporary` |
+| 字段 | 看什么 | 红灯 |
+|------|--------|------|
+| type | 访问方式 | ALL（全表扫描） |
+| rows | 预估扫描行数 | 几万几十万 |
+| Extra | 额外动作 | Using filesort、Using temporary |
 
-type 从快到慢：`const → eq_ref → ref → range → index → ALL`。
+type 从快到慢：const → eq_ref → ref → range → index → ALL。注意 index 不是好词，它照样把整棵索引从头走到尾，跟 ALL 是难兄难弟，只是少读点数据。要的是 ref 和 range。
 
-**SQL 优化说白了就一件事：把 type 往左推，把 rows 从十万打到个位数。**
-`Extra` 里出现 `Using index` 反倒是好事（覆盖索引）。
+Extra 里出现 Using index 是好事，说明走了覆盖索引（下面讲）。出现 filesort 或 temporary，就是 MySQL 在替你多干活。
 
-## 第 1 环：索引的"里子"
+优化的动作就一个：type 往左推，rows 从几万打到几行。
 
-### 1. 联合索引有最左前缀
+## 索引
 
-`uk_user_product(user_id, product_id)` 这种联合索引：
+加索引谁都会，坑在细节。
 
-```sql
-WHERE user_id = 2000                    -- ✅ 走索引（最左列）
-WHERE product_id = 88                   -- ❌ 跳过了 user_id，全表扫描
-WHERE user_id = 2000 AND product_id = 88 -- ✅ 走索引
-```
+**最左前缀。** 联合索引 (a, b, c) 不是只认最左列，是从最左开始连续的一段都算数：
 
-### 2. 覆盖索引
+| WHERE | 用到 |
+|-------|------|
+| a | a |
+| a AND b | a, b |
+| a AND b AND c | 全部 |
+| b / c / b AND c | 没从 a 开始，用不上 |
+| a AND c | 只用 a，断在 b |
 
-查询的列全在索引里，就不用"回表"取数据：
+短可以，断不行。还有个反直觉的：WHERE 里条件的书写顺序无所谓，(user_id, product_id) 碰上 `WHERE product_id=88 AND user_id=2000` 照样全走，优化器自己会调换。
 
-```sql
-SELECT user_id, product_id FROM orders WHERE user_id = 2000;
--- Extra: Using index，直接从索引拿完
-```
+**覆盖索引。** 要查的列全在某棵索引里，就不用回表，直接从索引拿完，Extra 显示 Using index。它不是一种专门建的索引，是查询和索引之间的一种关系。二级索引里还藏着主键，所以 `SELECT id, user_id, product_id` 也算覆盖。SELECT * 的罪状就在这：星号里总有索引装不下的列，一回表，覆盖就破了。
 
-这也是别无脑 `SELECT *` 的原因之一——`*` 把回表的路全走一遍。
-
-### 3. 索引失效的几个经典坑
+**失效的坑。** 面试和线上都高频：
 
 ```sql
-WHERE DATE(create_time) = '2026-06-15'   -- ❌ 列上套函数，索引废了
+WHERE DATE(create_time) = '2026-06-15'   -- 列上套函数，废
 WHERE create_time >= '2026-06-15'
-  AND create_time < '2026-06-17'         -- ✅ 改写成范围
+  AND create_time < '2026-06-16'         -- 改写成范围，活
 
-WHERE phone = 13800000123   -- ❌ phone 是 varchar，隐式转数字，全表
-WHERE phone = '13800000123' -- ✅
+WHERE phone = 13800000123   -- phone 是 varchar，隐式转数字，废
+WHERE phone = '13800000123' -- 带引号，活
 
-WHERE name LIKE '%张'       -- ❌ 左模糊，B+树没法跳
-WHERE name LIKE '张%'       -- ✅ 还能走
+WHERE name LIKE '%张'       -- 左模糊，B+ 树没法跳，废
+WHERE name LIKE '张%'       -- 活
 ```
 
-一句话规律：**索引列上裸着用（不套函数、不转类型、不左模糊、不跳过前导列），索引才在。**
+规律就一句：索引列要裸着用。套函数、隐式转换、左模糊、跳前导列，中一个废一个条件。注意废的是那个条件，不是整条查询，最左列还占着的话前面照常走（练习 8 有现场）。
 
-### 4. 索引不是免费的
+**索引要花钱。** 每多一棵，写入多维护一棵 B+ 树，还占磁盘。每个字段都建，等于写入变慢。一张表三五个封顶。建给谁，看等值查询的频次乘区分度（练习 11）。
 
-每加一个，写入多维护一棵 B+ 树，还占磁盘。给每个字段建索引 = 写入变慢的负优化。一般一张表 3~5 个索引封顶。
+## SQL 写法
 
-## 第 2 环：SQL 写法本身
+别 SELECT *。省 IO 是次要的，保住覆盖索引是主要的。
 
-- **SELECT 具体列**，别 `*`。省 IO，还可能白送覆盖索引。
-- **深分页**是隐形杀手：`LIMIT 100000, 10` 的真实含义是"扫 100010 行，扔掉前 10 万行"。改成游标 `WHERE id > 上一页最后一条的id ORDER BY id LIMIT 10`，或者延迟关联（子查询先查 id 再回表）。
-- **批量代替循环**：循环里一条条 INSERT/UPDATE = N 次网络往返。一条多 VALUES、或者 `rewriteBatchedStatements=true`。
-- **UNION ALL 代替 UNION**：UNION 要去重（临时表+排序），确定没有重复就别付这个钱。
-- **JOIN 小表驱动大表**，被驱动表的关联列要有索引。
+深分页是隐形杀手。`LIMIT 100000, 10` 的意思是扫 100010 行，扔掉前面 10 万行。改成游标 `WHERE id > 上一页最后一条的 id`，或者延迟关联：子查询先取 id 再回表。练习 6 有耗时对比。
 
-## 第 3 环：表结构
+循环里一条条 INSERT/UPDATE，N 条就是 N 次网络往返。拼成一条多 VALUES，或者 JDBC 打开 rewriteBatchedStatements。秒杀那篇里 2000 线程 4000 次库操作，就是这个病的极端版。
 
-- 类型够用就好：`status` 用 `tinyint`，别用 `int` 或 `varchar`。
-- **主键用自增整数**。拿 UUID 字符串当主键 = 插入全是随机写，B+ 树页分裂一片。正确姿势：自增 `id` 当主键、业务单号 `order_no` 单独做唯一索引（本 lab 的 orders 表就是这么设计的）。
-- 字段尽量 `NOT NULL` + 默认值，可空列让索引和统计信息都变复杂。
-- 大字段（text、超长 varchar）拆到子表冷热分离，别拖累热查询。
+UNION 会去重（临时表加排序），确定没重复就用 UNION ALL。JOIN 记得小表驱动大表，被驱动表的关联列要有索引（练习 7）。
 
-## 第 4 环：架构（终局）
+## 表结构
 
-单条 SQL 优化到头也就是几十毫秒的事，量真上来靠：缓存挡读写（Redis）、MQ 削峰、读写分离、分库分表。
+类型够用就好，status 用 tinyint，别上 int。主键用自增整数：UUID 字符串当主键是灾难，插入全是随机写，B+ 树页分裂一片。正确姿势是自增 id 当主键，业务单号单独做唯一索引，orders 表就是这么设计的，跟 seckill 的 order_info 一个路子。字段尽量 NOT NULL 加默认值。text 这类大字段拆去子表，别拖累热查询。
 
-一句话串起来：用一条原子的 `UPDATE ... AND stock > 0` 干掉应用层"先查再扣"，是 SQL 优化；把无效请求挡到 Redis/MQ 外面，是架构优化。本质是同一件事——**减少无效往返**。
+## 架构
 
----
+单条 SQL 优化到头也就几十毫秒。量真上来是另一层活：缓存挡读写、MQ 削峰、读写分离、分库分表。
 
-## 动手路线（对应 exercises.sql）
+秒杀那篇其实也算 SQL 优化：一条原子的 `UPDATE ... AND stock > 0`，把应用层的"先查再扣"干掉，无效往返砍半，并发窗口也没了。上 Redis 和 MQ 是同一个思路再放大一层。减少无效往返，这句话在哪个层面都成立。
 
-| 练习 | 练什么 | 先猜什么 |
-|------|--------|----------|
-| 1 | 全表扫描 → 索引 | 加索引前后 type/rows 变化 |
-| 2 | 最左前缀 | 三条 WHERE 哪条能走索引 |
-| 3 | 覆盖索引 | `SELECT *` 和具体列的 Extra 区别 |
-| 4 | 函数杀索引 | `DATE(col)=` 和范围写法谁全表 |
-| 5 | 隐式转换 | 带引号和不带引号差在哪 |
-| 6 | 深分页 | LIMIT 十万偏移 vs 游标的 rows 和耗时 |
-| 7 | JOIN 索引 | 被驱动表没索引时 type 是什么 |
+## 动手路线
 
-每条 EXPLAIN 跑之前先写一句自己的预测，再看结果——猜错的地方就是你原来理解的盲区。
+| 练习 | 练什么 | 看什么 |
+|------|--------|--------|
+| 1 | 全表扫描变索引 | type/rows 前后变化 |
+| 2 | 最左前缀 | 三条 WHERE 谁能走 |
+| 3 | 覆盖索引 | SELECT * 和具体列的 Extra |
+| 4 | 函数杀索引 | 谁全表谁 range |
+| 5 | 隐式转换 | 带不带引号差在哪 |
+| 6 | 深分页 | LIMIT 偏移 vs 游标 |
+| 7 | JOIN | 被驱动表没索引时 type 是什么 |
+| 8 | ORDER BY | filesort 什么时候消失 |
+| 9 | COUNT | 三个数一样吗 |
+| 10 | 慢查询日志 | 谁被记进账本 |
+| 11 | 区分度 | 建了索引一定快吗 |
 
----
+跑之前先写自己的预测再看结果。猜错的地方就是盲区。
 
-## 进阶地图（这份笔记没覆盖的）
+## 补：高频的四个
 
-上面五环是实战主干，完整版图还有这些，按优先级排：
+主干之外这四个出现频率最高，练习 8 到 11 对应。
 
-**第一梯队（高频，值得补）：**
-1. ORDER BY 走索引消除 filesort（WHERE 等值占满索引前缀，ORDER BY 顺索引顺序）
-2. COUNT(\*) 一族：count(\*)≈count(1) 走最小二级索引；count(col) 不计 NULL；大表别随手 count
-3. 慢查询日志：slow_query_log + long_query_time，或 sys.statement_analysis 按 SQL 指纹汇总——先找到该优化谁
-4. 区分度：status 这种低区分度的列不值得建索引
+**ORDER BY 和 filesort。** 引擎交出来的行是访问路径的顺序，不是你要的顺序。两边对不上，MySQL 就自己排一遍，Extra 记一笔 Using filesort。这名字有历史包袱，不一定写磁盘，sort_buffer 够大就在内存里排。它的成本按参与排序的行数算，跟返回几行无关，LIMIT 10 也得先把十万行排完才知道是哪 10 条。消掉它就是把顺序做进索引：ORDER BY create_time 有索引就顺着读；WHERE 等值加 ORDER BY 就拿联合索引 (user_id, create_time) 把两段接上，等值钉住前缀，后面的列天然有序。混方向排序（a ASC, b DESC）在 MySQL 8 可以建 DESC 索引对付。
 
-**第二梯队（面试加分）：**
-5. 聚簇索引/回表/页分裂的机制（不只结论）
-6. JOIN 算法：NLJ vs BNL，小表驱动大表的原因，MySQL 8 hash join
-7. 改写手法：EXISTS vs IN、OR 改 UNION ALL、子查询改 JOIN
-8. MySQL 8 函数索引 / 虚拟生成列（"函数废索引"的官方解法）
+**COUNT。** count(*) 和 count(1) 一样，InnoDB 数行数不挑列，挑当时最小的那棵索引。count(col) 不统计 NULL，col 不在索引里还得整行读。大表随手一个 count(*) 就是慢查询，能缓存能预计算就别实时数。
 
-**第三梯队（深水区，到用再学）：**
-9. 统计信息 ANALYZE TABLE、优化器选错索引
-10. InnoDB：buffer pool、redo/undo、锁模型、大事务
-11. 分区表（RANGE/HASH）
-12. 反范式/汇总表（预计算，读多写少的大杀器）
+**慢查询日志。** 前面都是拿一条 SQL 分析它，实战第一步是从一万条里找出该优化谁。slow_query_log 加 long_query_time，超过阈值自动落盘，演示时 log_output='TABLE' 可以直接记进 mysql.slow_log 表里查。坑在 long_query_time 有 global 和 session 两个值，SET GLOBAL 之后当前窗口还是老值，要补一句 SET SESSION。汇总拿 mysqldumpslow 或 pt-query-digest 嚼日志文件，嫌麻烦就 sys.statement_analysis 看指纹排行。
 
-水平自评：日常开发 ≈ 够用；Java 面试 SQL 优化题 ≈ 中上（补满第一梯队基本满配）；DBA 向 ≈ 需要第三梯队。
+**区分度。** COUNT(DISTINCT col) 除以 COUNT(*)，越接近 1 越值得建。status 这种两三个值的列，建了索引查大范围也不快，甚至更慢：5 万次随机查找 vs 10 万行顺序扫描。练习 11 里有计时对比，跑完就服了。
+
+## 还没覆盖的
+
+面试爱问的第二梯队：聚簇索引和回表的机制（现在只有结论没有过程）、JOIN 的 NLJ/BNL、小表驱动大表的底层原因、EXISTS vs IN、OR 改 UNION ALL、子查询改 JOIN、MySQL 8 的函数索引和生成列。
+
+深水区第三梯队，用到再开：统计信息和优化器选错索引、buffer pool、redo/undo 和锁模型、分区表、反范式和汇总表。
+
+水平自评：日常开发够用，面试这道题基本满配，DBA 向还差第三梯队。

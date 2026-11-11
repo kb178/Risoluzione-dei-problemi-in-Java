@@ -71,6 +71,99 @@ EXPLAIN SELECT p.name, COUNT(*) AS cnt
 FROM products p JOIN orders o ON o.product_id = p.id
 GROUP BY p.id;
 
+-- ============ 练习 8：ORDER BY 消掉 filesort ============
+-- 索引本身就是有序的：让 ORDER BY 的顺序跟某个索引一致，排序就白送了
+
+-- 场景一：没 WHERE，按时间取最早 10 条
+-- （先清掉练习 4 建的 idx_ctime；报 Can't DROP 就说明本来没有，忽略继续）
+DROP INDEX idx_ctime ON orders;
+-- 先猜：Extra 里会不会有 Using filesort？
+EXPLAIN SELECT * FROM orders ORDER BY create_time LIMIT 10;
+
+CREATE INDEX idx_ctime ON orders(create_time);
+-- 索引已经是有序的，顺着读就行 → filesort 应该消失了
+EXPLAIN SELECT * FROM orders ORDER BY create_time LIMIT 10;
+
+-- 场景二（更常见）：WHERE 等值 + ORDER BY
+-- 先猜：会走 user_id 索引吗？filesort 还需要吗？
+EXPLAIN SELECT * FROM orders WHERE user_id = 2000 ORDER BY create_time LIMIT 10;
+
+-- 联合索引把"等值"和"排序"两段连起来：(user_id, create_time)
+CREATE INDEX idx_user_ctime ON orders(user_id, create_time);
+-- user_id 用等值钉住后，create_time 在索引里已经是有序的 → filesort 消失
+EXPLAIN SELECT * FROM orders WHERE user_id = 2000 ORDER BY create_time LIMIT 10;
+
+-- ============ 练习 9：COUNT 三兄弟 ============
+-- 前置：加个可空列（跑一次就够；报 Duplicate column 就跳过这行）
+ALTER TABLE orders ADD COLUMN remark VARCHAR(20) NULL;
+UPDATE orders SET remark = '已备注' WHERE id % 2 = 0;
+
+-- 先猜：三个数一样吗？谁最小？
+SELECT COUNT(*) AS c_star, COUNT(1) AS c_one, COUNT(remark) AS c_remark FROM orders;
+
+-- 再看 EXPLAIN：
+-- count(*)/count(1)：不挑列，挑当时最小的索引直接数（看 key 是谁——这就是知识点）
+-- count(remark)：这一列不在任何索引里，只能整行读
+EXPLAIN SELECT COUNT(*) FROM orders;
+EXPLAIN SELECT COUNT(1) FROM orders;
+EXPLAIN SELECT COUNT(remark) FROM orders;
+
+-- 记三句：
+-- count(*) ≈ count(1)；count(col) 不统计 NULL；大表上随手 count(*) 本身就是慢查询
+
+-- ============ 练习 10：慢查询日志——先找到该优化谁 ============
+-- 之前都是"拿到一条 SQL 分析它"，实战第一步是"从一万条里找出该优化谁"
+-- 演示起见：日志记进 mysql.slow_log 表、阈值临时调成 0（全记）
+SET GLOBAL log_output = 'TABLE';
+SET GLOBAL long_query_time = 0;
+SET SESSION long_query_time = 0;  -- 别漏这行：阈值是 global+session 两个值，不然当前窗口还是 10 秒
+TRUNCATE TABLE mysql.slow_log;
+SET GLOBAL slow_query_log = 1;
+
+-- 跑两个故意慢的（左模糊永远全表扫）
+SELECT * FROM orders WHERE order_no LIKE '%abcdef%' LIMIT 5;
+SELECT COUNT(*) FROM orders WHERE user_id > 5000;
+
+-- 先关掉再查账本（不关的话，它连你查账本这条 SQL 都记）
+SET GLOBAL slow_query_log = 0;
+SELECT query_time, LEFT(sql_text, 60) AS sql_preview FROM mysql.slow_log;
+
+-- 还原现场（生产上阈值一般是 1 秒，日志记在文件里，不是表）
+SET GLOBAL long_query_time = 10;
+
+-- 真实排查的两个入口：
+-- ① 慢日志文件 + mysqldumpslow / pt-query-digest 汇总
+-- ② SELECT LEFT(query,50), exec_count FROM sys.statement_analysis
+--    ORDER BY exec_count DESC LIMIT 5;   ← 按 SQL 指纹看排行
+
+-- ============ 练习 11：区分度——索引该加给谁 ============
+-- 区分度 = COUNT(DISTINCT col) / COUNT(*)，越接近 1 越值得建索引
+SELECT COUNT(DISTINCT user_id)    / COUNT(*) AS sel_user,
+       COUNT(DISTINCT product_id) / COUNT(*) AS sel_product,
+       COUNT(DISTINCT status)     / COUNT(*) AS sel_status
+FROM orders;
+
+-- 给区分度最低的 status 建索引，看它救不救得了 80% 的行
+CREATE INDEX idx_status ON orders(status);
+EXPLAIN SELECT * FROM orders WHERE status = 0;   -- 80% 的行都在这
+EXPLAIN SELECT * FROM orders WHERE status = 1;   -- 20%
+-- 对比一下同样是 ref 的另一条，看 rows 差多少
+EXPLAIN SELECT * FROM orders WHERE user_id = 2000;
+
+-- 计时验证"建了索引也不一定快"（子查询包一层，免得打印 8 万行的时间算进去）
+SET @t0 = NOW(6);
+SELECT COUNT(*) FROM (SELECT id FROM orders WHERE status = 0) t;
+SELECT ROUND(TIMESTAMPDIFF(MICROSECOND, @t0, NOW(6))/1000, 1) AS ms_用索引;
+
+SET @t0 = NOW(6);
+SELECT COUNT(*) FROM (SELECT id FROM orders IGNORE INDEX (idx_status) WHERE status = 0) t;
+SELECT ROUND(TIMESTAMPDIFF(MICROSECOND, @t0, NOW(6))/1000, 1) AS ms_全表扫;
+
+DROP INDEX idx_status ON orders;
+
+-- 结论：等值查询频次 × 区分度，两个都高才值得建
+-- status 这种几个值的列单独立索引省不了事，真查大范围它反而拖后腿
+
 -- ============ 加餐：EXPLAIN 之后想看 MySQL 实际怎么改写你的 SQL ============
 -- 有些失效是隐性的（比如练习 5），跑完 EXPLAIN 接着跑这个，能看到改写后的真身
 SHOW WARNINGS;
